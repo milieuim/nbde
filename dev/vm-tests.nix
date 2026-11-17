@@ -62,6 +62,11 @@
           nodes.machine = {
             environment.systemPackages = [ agent ];
             environment.etc."nbde/agent.toml".text = ''
+              console = false
+              attempt_timeout_secs = 1
+              retry_interval_secs = 1
+              deadline_secs = 3
+
               [[volume]]
               name = "crypt-root"
               jwe = "/etc/nbde/crypt-root.jwe"
@@ -80,9 +85,10 @@
                 assert "unexpected argument `decrypt`" in out, out
                 assert "usage:" in out, out
 
-            with subtest("root passes hardening before reaching the unimplemented modes"):
+            with subtest("root passes hardening; without tang servers both modes fail cleanly"):
                 out = machine.fail("nbde-agent 2>&1")
-                assert "daemon mode is not implemented yet" in out, out
+                assert "deadline reached before crypt-root was unlocked" in out, out
+                assert "lock process memory" not in out, out
                 # No tang server runs here, so check gets past hardening and fails to unlock.
                 out = machine.fail("nbde-agent check /etc/nbde/crypt-root.jwe 2>&1")
                 assert "unlock check failed" in out, out
@@ -94,7 +100,7 @@
                     "-p LimitMEMLOCK=65536 nbde-agent 2>&1"
                 )
                 assert "lock process memory" in out, out
-                assert "not implemented" not in out, out
+                assert "waiting to unlock" not in out, out
 
             with subtest("config errors are reported after hardening"):
                 machine.succeed("printf 'secret = 1\\n' > /tmp/bad.toml")
@@ -193,6 +199,162 @@
           '';
         };
 
+        vm-daemon = pkgs.testers.runNixOSTest {
+          name = "nbde-daemon";
+          nodes.machine = {
+            virtualisation.emptyDiskImages = [ 64 ];
+            environment.systemPackages = [
+              agent
+              pkgs.cryptsetup
+              pkgs.socat
+            ];
+            environment.etc."nbde/vectors".source = ../tests/vectors;
+            environment.etc."nbde/agent.toml".text = ''
+              # Console output would interleave with the test log on ttyS0.
+              console = false
+              retry_interval_secs = 2
+              attempt_timeout_secs = 5
+              deadline_secs = 120
+
+              [[volume]]
+              name = "nbdetest"
+              jwe = "/etc/nbde/vectors/sss.jwe"
+            '';
+            environment.etc."nbde/short.toml".text = ''
+              # Console output would interleave with the test log on ttyS0.
+              console = false
+              retry_interval_secs = 2
+              attempt_timeout_secs = 2
+              deadline_secs = 10
+
+              [[volume]]
+              name = "nbdetest"
+              jwe = "/etc/nbde/vectors/sss.jwe"
+            '';
+            systemd.services = builtins.listToAttrs (
+              map
+                (
+                  { name, port }:
+                  {
+                    name = "tang-${name}";
+                    value.serviceConfig.ExecStart = "${pkgs.tang}/libexec/tangd -l -p ${toString port} /etc/nbde/vectors/tang-${name}";
+                  }
+                )
+                [
+                  {
+                    name = "a";
+                    port = 18731;
+                  }
+                  {
+                    name = "b";
+                    port = 18732;
+                  }
+                ]
+            );
+          };
+          testScript = ''
+            import time
+
+            CS = "${pkgs.systemd}/lib/systemd/systemd-cryptsetup"
+            SOCK = "/run/nbde/key.sock"
+
+            def attach(unit, volume="nbdetest"):
+                machine.succeed(
+                    f"systemd-run --quiet --no-ask-password --unit={unit} {CS} attach {volume} /dev/vdb {SOCK} luks"
+                )
+
+            def start_agent(config="/etc/nbde/agent.toml"):
+                # Type=notify: returns once the agent has bound the socket.
+                machine.succeed(
+                    "systemd-run --quiet --no-ask-password --unit=agent -p Type=notify -p NotifyAccess=main "
+                    f"nbde-agent --config {config}"
+                )
+                machine.succeed(f"test -S {SOCK}")
+                machine.succeed(f"test \"$(stat -c %a {SOCK})\" = 600")
+
+            def agent_result():
+                machine.wait_until_fails("systemctl is-active --quiet agent.service", timeout=60)
+                return machine.succeed("systemctl show -p Result --value agent.service").strip()
+
+            def journal(unit):
+                return machine.succeed(f"journalctl -b -u {unit} --no-pager -o cat")
+
+            def ask_pending():
+                return machine.succeed("ls /run/systemd/ask-password/ 2>/dev/null | grep -c '^ask\\.' || true").strip() != "0"
+
+            def reset():
+                machine.succeed(f"{CS} detach nbdetest || true")
+                machine.succeed("systemctl --no-ask-password stop 'attach-*' agent.service || true")
+                machine.succeed("systemctl reset-failed || true")
+
+            machine.wait_for_unit("multi-user.target")
+            machine.succeed(
+                "cryptsetup luksFormat --batch-mode --type luks2 --pbkdf pbkdf2 "
+                "--pbkdf-force-iterations 1000 /dev/vdb /etc/nbde/vectors/plaintext"
+            )
+
+            with subtest("agent unlocks a LUKS volume through systemd-cryptsetup"):
+                machine.succeed("systemctl start tang-a tang-b")
+                machine.wait_for_open_port(18731)
+                machine.wait_for_open_port(18732)
+                start_agent()
+                attach("attach-ok")
+                machine.wait_for_file("/dev/mapper/nbdetest", timeout=30)
+                assert agent_result() == "success"
+                log = journal("agent.service")
+                assert "nbdetest: unlocked on attempt 1" in log, log
+                assert "nbdetest: key delivered" in log, log
+                assert "all volumes unlocked" in log, log
+                machine.succeed(f"test ! -e {SOCK}")
+                reset()
+
+            with subtest("an early connection is held while the agent retries"):
+                machine.succeed("systemctl --no-ask-password stop tang-b")
+                start_agent()
+                attach("attach-hold")
+                time.sleep(6)
+                machine.succeed("systemctl is-active --quiet attach-hold.service")
+                machine.succeed("test ! -b /dev/mapper/nbdetest")
+                assert not ask_pending(), "fell back to a prompt while the agent was retrying"
+                log = journal("agent.service")
+                assert "waiting (" in log and "http://127.0.0.1:18732 unreachable" in log, log
+                machine.succeed("systemctl start tang-b")
+                machine.wait_for_file("/dev/mapper/nbdetest", timeout=30)
+                assert agent_result() == "success"
+                reset()
+
+            with subtest("at the deadline the held connection falls back to a passphrase"):
+                machine.succeed("systemctl --no-ask-password stop tang-a tang-b")
+                start_agent("/etc/nbde/short.toml")
+                attach("attach-deadline")
+                assert not ask_pending()
+                machine.wait_until_succeeds(
+                    "ls /run/systemd/ask-password/ | grep -q '^ask\\.'", timeout=40
+                )
+                assert agent_result() != "success"
+                log = journal("agent.service")
+                assert "deadline reached; nbdetest falls back to passphrase" in log, log
+                machine.succeed("test ! -b /dev/mapper/nbdetest")
+                reset()
+
+            with subtest("connections that are not systemd-cryptsetup get nothing"):
+                start_agent()
+                out = machine.succeed(f"timeout 5 socat -u UNIX-CONNECT:{SOCK} - | wc -c").strip()
+                assert out == "0", out
+                machine.succeed("systemctl is-active --quiet agent.service")
+                log = journal("agent.service")
+                assert "rejected connection: peer is not bound to an abstract address" in log, log
+
+                # An unknown volume name is refused, so systemd-cryptsetup prompts at once.
+                attach("attach-unknown", volume="othervolume")
+                machine.wait_until_succeeds(
+                    "ls /run/systemd/ask-password/ | grep -q '^ask\\.'", timeout=20
+                )
+                assert "refusing request for othervolume" in journal("agent.service")
+                reset()
+          '';
+        };
+
         vm-cryptsetup-socket = pkgs.testers.runNixOSTest {
           name = "nbde-cryptsetup-socket";
           nodes.machine = {
@@ -239,7 +401,7 @@
 
             with subtest("key is read from the socket; peer address names the volume"):
                 set_mode("serve")
-                machine.succeed(f"systemd-run --quiet --wait --pipe {ATTACH}")
+                machine.succeed(f"systemd-run --quiet --no-ask-password --wait --pipe {ATTACH}")
                 machine.succeed("test -b /dev/mapper/nbdetest")
                 entries = connections()
                 assert len(entries) == 1, entries
@@ -252,7 +414,7 @@
             with subtest("a held connection makes systemd-cryptsetup wait for the key"):
                 set_mode("delay:20")
                 start = time.monotonic()
-                machine.succeed(f"systemd-run --quiet --wait --pipe {ATTACH}")
+                machine.succeed(f"systemd-run --quiet --no-ask-password --wait --pipe {ATTACH}")
                 elapsed = time.monotonic() - start
                 print(f"attach with 20s delay took {elapsed:.1f}s")
                 assert elapsed >= 19, elapsed
@@ -262,20 +424,20 @@
 
             with subtest("closing without data falls back to a password prompt"):
                 set_mode("close")
-                machine.succeed(f"systemd-run --quiet --unit=attach-close {ATTACH}")
+                machine.succeed(f"systemd-run --quiet --no-ask-password --unit=attach-close {ATTACH}")
                 machine.wait_until_succeeds("ls /run/systemd/ask-password/ | grep -q '^ask\\.'", timeout=30)
                 print("connections before prompt:", len(connections()), connections())
                 print("ask files:", ask_files())
                 machine.succeed("test ! -b /dev/mapper/nbdetest")
-                machine.succeed("systemctl stop attach-close.service")
+                machine.succeed("systemctl --no-ask-password stop attach-close.service")
 
             with subtest("a wrong key also falls back to a password prompt"):
                 set_mode("wrong")
-                machine.succeed(f"systemd-run --quiet --unit=attach-wrong {ATTACH}")
+                machine.succeed(f"systemd-run --quiet --no-ask-password --unit=attach-wrong {ATTACH}")
                 machine.wait_until_succeeds("ls /run/systemd/ask-password/ | grep -q '^ask\\.'", timeout=30)
                 print("connections before prompt:", len(connections()), connections())
                 machine.succeed("test ! -b /dev/mapper/nbdetest")
-                machine.succeed("systemctl stop attach-wrong.service")
+                machine.succeed("systemctl --no-ask-password stop attach-wrong.service")
           '';
         };
       };

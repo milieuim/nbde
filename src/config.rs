@@ -12,6 +12,9 @@ use snafu::{ResultExt, Snafu, ensure};
 /// unit names; keep them to a conservative character set.
 const MAX_VOLUME_NAME_LEN: usize = 64;
 
+/// The keyfile path systemd-cryptsetup is pointed at (design §7.6).
+pub const DEFAULT_SOCKET: &str = "/run/nbde/key.sock";
+
 #[derive(Debug, Snafu)]
 pub enum ConfigError {
     #[snafu(display("read config {}", path.display()))]
@@ -40,6 +43,9 @@ pub enum ConfigError {
 
     #[snafu(display("`{field}` must not exceed deadline_secs"))]
     ExceedsDeadline { field: &'static str },
+
+    #[snafu(display("socket path {} must be absolute with a parent directory", path.display()))]
+    SocketPath { path: PathBuf },
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -51,6 +57,10 @@ pub struct Config {
     retry_interval_secs: u64,
     #[serde(default = "default_deadline")]
     deadline_secs: u64,
+    #[serde(default = "default_socket")]
+    socket: PathBuf,
+    #[serde(default = "default_console")]
+    console: bool,
     #[serde(rename = "volume")]
     volumes: Vec<Volume>,
 }
@@ -74,6 +84,14 @@ fn default_deadline() -> u64 {
     900
 }
 
+fn default_socket() -> PathBuf {
+    PathBuf::from(DEFAULT_SOCKET)
+}
+
+fn default_console() -> bool {
+    true
+}
+
 impl Config {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let text = std::fs::read_to_string(path).context(ReadSnafu { path })?;
@@ -94,6 +112,12 @@ impl Config {
 
     fn validate(&self) -> Result<(), ConfigError> {
         ensure!(!self.volumes.is_empty(), NoVolumeSnafu);
+        ensure!(
+            self.socket.is_absolute()
+                && self.socket.parent().is_some_and(|p| p != Path::new("/"))
+                && self.socket.file_name().is_some(),
+            SocketPathSnafu { path: &self.socket }
+        );
 
         let mut seen = HashSet::new();
         for volume in &self.volumes {
@@ -133,6 +157,14 @@ impl Config {
 
     pub fn deadline(&self) -> Duration {
         Duration::from_secs(self.deadline_secs)
+    }
+
+    pub fn socket(&self) -> &Path {
+        &self.socket
+    }
+
+    pub fn console(&self) -> bool {
+        self.console
     }
 
     pub fn volumes(&self) -> &[Volume] {
@@ -185,6 +217,8 @@ mod tests {
         assert_eq!(config.attempt_timeout(), Duration::from_secs(30));
         assert_eq!(config.retry_interval(), Duration::from_secs(10));
         assert_eq!(config.deadline(), Duration::from_secs(900));
+        assert_eq!(config.socket(), Path::new(DEFAULT_SOCKET));
+        assert!(config.console());
         assert!(config.volume("crypt-root").is_some());
         assert!(config.volume("crypt-home").is_none());
     }
@@ -247,5 +281,20 @@ mod tests {
                 field: "attempt_timeout_secs"
             })
         ));
+    }
+
+    #[test]
+    fn socket_path_is_validated() {
+        for bad in ["key.sock", "/key.sock", "/"] {
+            let text = format!("socket = \"{bad}\"\n{MINIMAL}");
+            assert!(
+                matches!(parse(&text), Err(ConfigError::SocketPath { .. })),
+                "accepted `{bad}`"
+            );
+        }
+        let text = format!("socket = \"/run/x/k.sock\"\nconsole = false\n{MINIMAL}");
+        let config = parse(&text).unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(config.socket(), Path::new("/run/x/k.sock"));
+        assert!(!config.console());
     }
 }

@@ -1,17 +1,17 @@
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use nbde::agent::{self, AgentError};
 use nbde::args::{self, Mode, USAGE};
 use nbde::config::{Config, ConfigError};
 use nbde::harden::{HardenError, harden_process};
-use nbde::jose::MAX_JWE_LEN;
 use nbde::pin::{self, Context, HttpExchange, Outcome, PinError};
+use nbde::ui::Ui;
 use secrecy::ExposeSecret;
 use sha2::{Digest, Sha256};
-use snafu::{ResultExt, Snafu, ensure};
+use snafu::{ResultExt, Snafu};
 
 /// `check` has no config file; it uses the agent's default attempt timeout.
 const CHECK_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -29,20 +29,11 @@ enum Error {
     #[snafu(transparent)]
     Config { source: ConfigError },
 
-    #[snafu(display("read JWE {}", path.display()))]
-    ReadJwe {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-
-    #[snafu(display("JWE {} exceeds {MAX_JWE_LEN} bytes", path.display()))]
-    JweTooLarge { path: PathBuf },
+    #[snafu(transparent)]
+    Agent { source: AgentError },
 
     #[snafu(display("unlock check failed"))]
     Check { source: PinError },
-
-    #[snafu(display("{mode} mode is not implemented yet"))]
-    NotImplemented { mode: &'static str },
 }
 
 fn main() -> ExitCode {
@@ -67,8 +58,9 @@ fn run() -> Result<(), Error> {
         }
         Mode::Daemon { config } => {
             harden_process()?;
-            let _config = Config::load(&config)?;
-            NotImplementedSnafu { mode: "daemon" }.fail()
+            let config = Config::load(&config)?;
+            let ui = Ui::from_env(config.console());
+            Ok(agent::run(&config, &ui)?)
         }
         Mode::Check { jwe } => {
             harden_process()?;
@@ -80,7 +72,7 @@ fn run() -> Result<(), Error> {
 /// Runs one unlock attempt and prints per-server outcomes plus a digest
 /// prefix of the recovered secret. The secret itself is never printed.
 fn check(path: &Path) -> Result<(), Error> {
-    let text = read_jwe(path)?;
+    let text = agent::read_jwe(path)?;
     let ctx = Context::new(Arc::new(HttpExchange::new(CHECK_ATTEMPT_TIMEOUT)));
     let result = pin::decrypt(&text, &ctx);
 
@@ -101,18 +93,4 @@ fn check(path: &Path) -> Result<(), Error> {
         .collect();
     println!("threshold met; sha256(P)[0..{DIGEST_PREFIX_LEN}] = {prefix}");
     Ok(())
-}
-
-fn read_jwe(path: &Path) -> Result<String, Error> {
-    let file = std::fs::File::open(path).context(ReadJweSnafu { path })?;
-    let mut text = String::new();
-    // MAX_JWE_LEN fits in u64 on every supported target.
-    let limit = u64::try_from(MAX_JWE_LEN)
-        .unwrap_or(u64::MAX)
-        .saturating_add(1);
-    file.take(limit)
-        .read_to_string(&mut text)
-        .context(ReadJweSnafu { path })?;
-    ensure!(text.len() <= MAX_JWE_LEN, JweTooLargeSnafu { path });
-    Ok(text)
 }

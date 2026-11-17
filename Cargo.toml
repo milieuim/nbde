@@ -19,7 +19,7 @@ aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "al
 base64ct = { version = "1.8.3", features = ["alloc"] }
 crypto-bigint = { version = "0.7.11", default-features = false, features = ["zeroize"] }
 p521 = { version = "0.14.0", default-features = false, features = ["arithmetic", "getrandom", "std"] }
-rustix = { version = "1.1.6", features = ["mm", "process"] }
+rustix = { version = "1.1.6", features = ["fs", "mm", "net", "process"] }
 secrecy = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

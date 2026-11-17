@@ -73,7 +73,7 @@ BCP 14（[RFC 2119]、[RFC 8174]）解释，且仅在全部大写时具有该含
 eihort initrd
   systemd-cryptsetup@crypt-root ── keyfile = /run/nbde/key.sock（AF_UNIX）
                                         │
-  nbde-agent（Rust，socket 激活）◄───────┘
+  nbde-agent（Rust，Type=notify）◄───────┘
     sss t=2 → sss t=1 ×3 → tang
       └─ HTTP 直连 :7500 ──────────────────► gate ×3
                                                unlock-gate（Go，内嵌 tang.go）
@@ -318,7 +318,8 @@ nbde-agent check <jwe>           # 诊断模式
 ```
 
 - 参数解析 MUST 仅使用 `std::env::args`，MUST NOT 引入参数解析库。
-- 守护模式由 systemd 启动，经 `LISTEN_FDS` 接收监听套接字（§7.5）。
+- 守护模式由 systemd 以 `Type=notify` 启动，自行绑定监听套接字并在绑定后发送 `READY=1`（§7.5）。
+  不使用 socket 激活：将 `LISTEN_FDS` 的整数 fd 转为套接字需要 `unsafe`，与 §8.1 冲突。
 - `check` 模式执行完整解锁流程（§7.4），输出每个 pin 与地址的结果及门限判定，
   并输出 `sha256(P)` 的前 8 字节。`check` MUST NOT 输出 P、CEK、share 或 Z。
 - nbde-agent MUST NOT 提供 encrypt、bind、decrypt-to-stdout 或本地控制套接字。
@@ -329,6 +330,8 @@ nbde-agent check <jwe>           # 诊断模式
 attempt_timeout_secs = 30
 retry_interval_secs  = 10
 deadline_secs        = 900
+socket               = "/run/nbde/key.sock"   # 默认值
+console              = true                   # 写 /dev/console；默认 true
 
 [[volume]]
 name = "crypt-root"
@@ -383,6 +386,9 @@ systemd-cryptsetup 将 keyfile 路径识别为 AF_UNIX 流套接字时，会连�
 - 到达 deadline 时，nbde-agent MUST 关闭所有挂起连接且不写入数据，然后以失败退出，
   使 systemd-cryptsetup 进入口令提示。
 - nbde-agent SHOULD 随 initrd 启动即开始网络解锁，而非等待首个连接，以重叠网络等待时间。
+- 套接字文件 MUST 为 `0600`，所在目录 MUST 为 `0700`；启动时 MAY 替换遗留的套接字文件，
+  MUST NOT 替换非套接字文件。进程退出时 SHOULD 删除套接字文件。
+- 每个卷的 P MUST 只交付一次；交付后的同卷请求 MUST 被拒绝（进入口令提示）。
 
 ### 7.6 initrd 集成
 
@@ -396,15 +402,17 @@ boot.initrd = {
     keyFile = "/run/nbde/key.sock";
     keyFileTimeout = 900;                   # 行为待验证（§12.1）
   };
-  systemd.sockets.nbde-agent = {
-    listenStreams = [ "/run/nbde/key.sock" ];
-    socketConfig.SocketMode = "0600";
-    wantedBy = [ "sockets.target" ];
-  };
   systemd.services.nbde-agent = {
-    # 尽早启动；网络未就绪由 agent 自身重试处理，不排在 wait-online 之后（单元依赖待验证）
-    wantedBy = [ "cryptsetup.target" ];
-    serviceConfig.ExecStart = "${pkgs.nbde-agent}/bin/nbde-agent";
+    # 尽早启动；网络未就绪由 agent 自身重试处理，不排在 wait-online 之后。
+    # Type=notify：绑定套接字后才视为启动完成，cryptsetup 排在其后。
+    wantedBy = [ "systemd-cryptsetup@crypt\\x2droot.service" ];
+    before = [ "systemd-cryptsetup@crypt\\x2droot.service" ];
+    unitConfig.DefaultDependencies = false;
+    serviceConfig = {
+      Type = "notify";
+      NotifyAccess = "main";
+      ExecStart = "${pkgs.nbde-agent}/bin/nbde-agent";
+    };
   };
   systemd.storePaths = [ "${pkgs.nbde-agent}/bin/nbde-agent" ];
   network.ssh.enable = true;                # 回退；仅内网可达
@@ -418,7 +426,7 @@ boot.initrd = {
 
 | 操作 | 方法 |
 |---|---|
-| 放弃网络解锁 | 经 initrd ssh：`systemctl stop nbde-agent.socket nbde-agent.service` |
+| 放弃网络解锁 | 经 initrd ssh：`systemctl stop nbde-agent.service` |
 | 输入 recovery passphrase | `systemd-tty-ask-password-agent`（initrd ssh）或 BMC 控制台 |
 
 ### 7.8 前置条件
@@ -591,7 +599,8 @@ deadline 内未凑足 2 份 → nbde-agent 关闭连接并退出 → 口令提�
 5. ~~agent 关闭连接且不写数据时~~：已解决。systemd-cryptsetup 视为密钥错误
    （"Failed to activate with key file … (Key data incorrect?)"），**立即**进入口令提示，
    且不会重新连接套接字；写入错误密钥时行为相同。
-6. NixOS systemd initrd 中 socket 激活与 `LISTEN_FDS` 的可用性及单元排序。
+6. NixOS systemd initrd 中 `Type=notify` agent 与 `systemd-cryptsetup@` 的单元排序（stage 2 中已由
+   `vm-daemon` 验证 notify 就绪、连接保持、deadline 回退与拒绝非法对端）。
 7. `boot.initrd.secrets` 字符串路径经 lanzaboote 是否正确进入 initrd 且不进入 Nix store。
 8. 从家庭网络（绕过 sing-box）到三台 gate `:7500` 的 IPv4 与 IPv6 实际可达性。
 
