@@ -83,8 +83,10 @@
             with subtest("root passes hardening before reaching the unimplemented modes"):
                 out = machine.fail("nbde-agent 2>&1")
                 assert "daemon mode is not implemented yet" in out, out
+                # No tang server runs here, so check gets past hardening and fails to unlock.
                 out = machine.fail("nbde-agent check /etc/nbde/crypt-root.jwe 2>&1")
-                assert "check mode is not implemented yet" in out, out
+                assert "unlock check failed" in out, out
+                assert "lock process memory" not in out, out
 
             with subtest("hardening fails closed without memlock headroom"):
                 out = machine.fail(
@@ -100,6 +102,94 @@
                 assert "parse config /tmp/bad.toml" in out, out
                 out = machine.fail("nbde-agent --config /nonexistent.toml 2>&1")
                 assert "read config /nonexistent.toml" in out, out
+          '';
+        };
+
+        vm-check = pkgs.testers.runNixOSTest {
+          name = "nbde-check";
+          nodes.machine = {
+            environment.systemPackages = [
+              agent
+              pkgs.clevis
+            ];
+            environment.etc."nbde/vectors".source = ../tests/vectors;
+            systemd.services = builtins.listToAttrs (
+              map
+                (
+                  { name, port }:
+                  {
+                    name = "tang-${name}";
+                    value = {
+                      wantedBy = [ "multi-user.target" ];
+                      serviceConfig.ExecStart = "${pkgs.tang}/libexec/tangd -l -p ${toString port} /etc/nbde/vectors/tang-${name}";
+                    };
+                  }
+                )
+                [
+                  {
+                    name = "a";
+                    port = 18731;
+                  }
+                  {
+                    name = "b";
+                    port = 18732;
+                  }
+                ]
+            );
+          };
+          testScript = ''
+            import json
+            import shlex
+
+            V = "/etc/nbde/vectors"
+            A = "http://127.0.0.1:18731"
+            B = "http://127.0.0.1:18732"
+
+            def digest(path):
+                return machine.succeed(f"sha256sum {path} | cut -c1-16").strip()
+
+            def check_ok(jwe, plaintext):
+                out = machine.succeed(f"nbde-agent check {jwe}")
+                print(out)
+                assert f"sha256(P)[0..8] = {digest(plaintext)}" in out, out
+                return out
+
+            machine.wait_for_unit("multi-user.target")
+            machine.wait_for_open_port(18731)
+            machine.wait_for_open_port(18732)
+
+            with subtest("reference clevis agrees the servers are live"):
+                machine.succeed(f"clevis decrypt < {V}/sss.jwe | cmp - {V}/plaintext")
+
+            with subtest("agent unlocks the reference vectors against real tangd"):
+                out = check_ok(f"{V}/tang.jwe", f"{V}/plaintext")
+                assert f"{A}  released" in out, out
+                for name in ["sss", "nested-sss"]:
+                    out = check_ok(f"{V}/{name}.jwe", f"{V}/plaintext")
+                    assert f"{A}  released" in out and f"{B}  released" in out, out
+
+            with subtest("agent unlocks a fresh JWE produced by clevis in this VM"):
+                config = json.dumps({"t": 2, "pins": {"tang": [{"url": A}, {"url": B}]}})
+                machine.succeed(
+                    "head -c 64 /dev/urandom > /root/p.bin",
+                    f"clevis encrypt sss {shlex.quote(config)} -y < /root/p.bin > /root/fresh.jwe",
+                )
+                out = check_ok("/root/fresh.jwe", "/root/p.bin")
+                lines = out.strip().splitlines()
+                assert all(
+                    line.startswith("http://") or line.startswith("threshold met")
+                    for line in lines
+                ), out
+
+            with subtest("losing one server breaks the 2-of-2 threshold with a clear reason"):
+                machine.succeed("systemctl stop tang-b.service")
+                out = machine.fail(f"nbde-agent check {V}/sss.jwe 2>&1")
+                print(out)
+                # With t = n = 2 one refusal makes success impossible, so the agent
+                # stops at once (as clevis does) without waiting for tang-a.
+                assert f"{B}  failed: {B}: recovery failed: connect to 127.0.0.1:18732" in out, out
+                assert "shares recovered" in out, out
+                check_ok(f"{V}/tang.jwe", f"{V}/plaintext")
           '';
         };
 
