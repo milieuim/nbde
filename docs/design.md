@@ -584,9 +584,13 @@ deadline 内未凑足 2 份 → nbde-agent 关闭连接并退出 → 口令提�
 1. ~~官方 clevis 的 JWE 格式细节~~：已解决，见 nbde 仓库 `docs/clevis-format.md`
    （依据 clevis 22 / jose / tang 15 源码与官方工具生成的测试向量）。
 2. ~~clevis tang URL 是否支持路径前缀~~：已解决，支持（`$url/adv/$thp`、`$url/rec/$kid` 字符串拼接）。
-3. systemd-cryptsetup 对端抽象地址的确切格式（`\0<random>/cryptsetup/<volume>`）。
-4. P 未就绪时保持连接，systemd-cryptsetup 是否等待；`keyFileTimeout` 在套接字场景下的语义。
-5. agent 关闭连接且不写数据时，systemd-cryptsetup 是否立即进入口令提示。
+3. ~~systemd-cryptsetup 对端抽象地址的确切格式~~：已解决（VM 测试 `vm-cryptsetup-socket`，
+   systemd 261.2）。实测为 `\0<16 个小写十六进制字符>/cryptsetup/<volume>`，对端 uid 为 0。
+4. P 未就绪时保持连接：**部分解决**。实测 systemd-cryptsetup 阻塞等待（20 s 延迟后成功解锁，
+   期间仅一次连接、未出现口令提示）；等待上限与 `keyFileTimeout` 在套接字场景下的语义仍待验证。
+5. ~~agent 关闭连接且不写数据时~~：已解决。systemd-cryptsetup 视为密钥错误
+   （"Failed to activate with key file … (Key data incorrect?)"），**立即**进入口令提示，
+   且不会重新连接套接字；写入错误密钥时行为相同。
 6. NixOS systemd initrd 中 socket 激活与 `LISTEN_FDS` 的可用性及单元排序。
 7. `boot.initrd.secrets` 字符串路径经 lanzaboote 是否正确进入 initrd 且不进入 Nix store。
 8. 从家庭网络（绕过 sing-box）到三台 gate `:7500` 的 IPv4 与 IPv6 实际可达性。

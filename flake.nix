@@ -26,7 +26,10 @@
       partitions = {
         dev.extraInputsFlake = ./dev;
         dev.module = _: {
-          imports = [ ./dev/checks.nix ];
+          imports = [
+            ./dev/checks.nix
+            ./dev/vm-tests.nix
+          ];
         };
       };
 

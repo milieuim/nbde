@@ -8,7 +8,14 @@
     { pkgs, ... }:
     let
       craneLib = inputs.crane.mkLib pkgs;
-      src = craneLib.cleanCargoSource self;
+      # Tests embed the interop vectors with include_str!, which
+      # cleanCargoSource would drop.
+      src = pkgs.lib.cleanSourceWith {
+        src = self;
+        name = "source";
+        filter =
+          path: type: craneLib.filterCargoSources path type || pkgs.lib.hasInfix "/tests/vectors" path;
+      };
 
       commonArgs = {
         inherit src;

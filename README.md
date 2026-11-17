@@ -24,7 +24,8 @@ hardening are implemented; the decrypt path follows `docs/clevis-format.md`.
 nix develop          # or direnv
 just test            # cargo nextest
 just lint            # clippy + rustfmt
-nix flake check      # audit, clippy, fmt, nextest
+just vm-tests        # NixOS VM tests (needs KVM)
+nix flake check      # audit, clippy, fmt, nextest, VM tests
 ```
 
 `tests/vectors/` holds interop vectors produced by the reference
