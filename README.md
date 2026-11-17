@@ -9,8 +9,28 @@ Policy-gated network-bound disk encryption for systemd initrd.
 - `unlock-gate` (planned, Go): a Tang-compatible server that releases only
   under an explicit policy (a pre-reboot arm or a human approval).
 
-Status: early development. Only argument parsing, configuration and process
-hardening are implemented; the decrypt path follows `docs/clevis-format.md`.
+Status: the agent side works end to end in VM tests (root on LUKS unlocked in
+the systemd initrd through tang servers, with passphrase fallback).
+unlock-gate is not implemented yet.
+
+## NixOS module
+
+```nix
+{
+  imports = [ nbde.nixosModules.default ];
+  boot.initrd.systemd.enable = true;
+  boot.initrd.network.enable = true;   # plus boot.initrd.systemd.network config
+  boot.initrd.luks.devices.crypt-root.device = "/dev/disk/by-uuid/...";
+  boot.initrd.nbde = {
+    enable = true;
+    # Runtime path, copied into the initrd as a secret; never in the store.
+    volumes.crypt-root.jwe = "/persist/keys/crypt-root.jwe";
+  };
+}
+```
+
+Bind with the official clevis (`clevis encrypt sss ...`) and add the plaintext
+as a LUKS keyslot; keep a recovery passphrase in another keyslot.
 
 ## Documents
 

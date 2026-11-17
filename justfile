@@ -17,4 +17,4 @@ check:
     nix flake check
 
 vm-tests:
-    nix build --no-link -L .#checks.x86_64-linux.vm-agent .#checks.x86_64-linux.vm-cryptsetup-socket
+    nix build --no-link -L .#checks.x86_64-linux.vm-agent .#checks.x86_64-linux.vm-cryptsetup-socket .#checks.x86_64-linux.vm-daemon .#checks.x86_64-linux.vm-check .#checks.x86_64-linux.vm-initrd

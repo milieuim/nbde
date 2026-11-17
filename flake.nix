@@ -29,6 +29,7 @@
           imports = [
             ./dev/checks.nix
             ./dev/vm-tests.nix
+            ./dev/vm-initrd.nix
           ];
         };
       };
@@ -83,6 +84,13 @@
               jose
             ];
           };
+        };
+
+      flake.nixosModules.default =
+        { pkgs, lib, ... }:
+        {
+          imports = [ ./module/initrd.nix ];
+          boot.initrd.nbde.package = lib.mkDefault (self.overlays.default pkgs pkgs).nbde-agent;
         };
 
       flake.overlays.default = final: _prev: {

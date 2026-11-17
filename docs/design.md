@@ -599,9 +599,14 @@ deadline 内未凑足 2 份 → nbde-agent 关闭连接并退出 → 口令提�
 5. ~~agent 关闭连接且不写数据时~~：已解决。systemd-cryptsetup 视为密钥错误
    （"Failed to activate with key file … (Key data incorrect?)"），**立即**进入口令提示，
    且不会重新连接套接字；写入错误密钥时行为相同。
-6. NixOS systemd initrd 中 `Type=notify` agent 与 `systemd-cryptsetup@` 的单元排序（stage 2 中已由
-   `vm-daemon` 验证 notify 就绪、连接保持、deadline 回退与拒绝非法对端）。
-7. `boot.initrd.secrets` 字符串路径经 lanzaboote 是否正确进入 initrd 且不进入 Nix store。
+6. ~~NixOS systemd initrd 中的单元排序~~：已解决（nbde 仓库 `vm-initrd` 测试，root 位于 LUKS）。
+   `boot.initrd.nbde` 模块中 `Type=notify` agent 排在 `systemd-cryptsetup@` 之前即可工作；
+   网络未就绪时首轮失败、随后重试成功；tang 恢复后在 deadline 内解锁；全部不可达时在 initrd
+   进入口令提示并可用 recovery passphrase 启动。注意：qemu-vm 以 `mkVMOverride` 将
+   `boot.initrd.luks.devices` 置空，测试中须在同优先级重述完整条目；模块以 assertion 检测
+   `keyFile` 被覆盖的情形。
+7. `boot.initrd.secrets` 字符串路径：**部分解决**。`vm-initrd` 中经 systemd-boot 的
+   `switch-to-configuration boot` 正确注入 initrd；lanzaboote 下的行为仍待在 eihort 上验证。
 8. 从家庭网络（绕过 sing-box）到三台 gate `:7500` 的 IPv4 与 IPv6 实际可达性。
 
 ### 12.2 后续工作（不在本草案范围）
