@@ -6,4 +6,5 @@
 pub mod args;
 pub mod config;
 pub mod harden;
+pub mod jose;
 pub mod secret;
