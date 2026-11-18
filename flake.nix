@@ -30,6 +30,8 @@
             ./dev/checks.nix
             ./dev/vm-tests.nix
             ./dev/vm-initrd.nix
+            ./dev/vm-gate.nix
+            ./dev/vm-gate-initrd.nix
           ];
         };
       };
@@ -65,6 +67,7 @@
             settings.hooks = {
               nixfmt.enable = true;
               rustfmt.enable = true;
+              gofmt.enable = true;
             };
           };
 
@@ -88,15 +91,29 @@
 
       flake.nixosModules.default =
         { pkgs, lib, ... }:
+        let
+          p = self.overlays.default pkgs pkgs;
+        in
         {
-          imports = [ ./module/initrd.nix ];
-          boot.initrd.nbde.package = lib.mkDefault (self.overlays.default pkgs pkgs).nbde-agent;
+          imports = [
+            ./module/initrd.nix
+            ./module/gate.nix
+            ./module/agent.nix
+            ./module/approve.nix
+          ];
+          boot.initrd.nbde.package = lib.mkDefault p.nbde-agent;
+          services.unlock-gate.package = lib.mkDefault p.unlock-gate;
+          services.unlock-agent.package = lib.mkDefault p.unlock-gate;
+          programs.unlock-approve.package = lib.mkDefault p.unlock-gate;
         };
 
       flake.overlays.default = final: _prev: {
         nbde-agent = final.callPackage ./package.nix {
           shortRev = self.shortRev or "dirty";
           craneLib = inputs.crane.mkLib final;
+        };
+        unlock-gate = final.callPackage ./gate/package.nix {
+          shortRev = self.shortRev or "dirty";
         };
       };
     };

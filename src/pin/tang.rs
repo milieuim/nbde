@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use p521::elliptic_curve::Generate;
 use p521::{NonZeroScalar, ProjectivePoint, PublicKey};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
 use zeroize::Zeroizing;
 
@@ -94,7 +94,11 @@ impl HttpExchange {
 impl Exchange for HttpExchange {
     fn recover(&self, url: &str, kid: &str, x: &EcJwk) -> Result<EcJwk, ExchangeError> {
         let endpoint = Endpoint::parse(url)?;
-        let body = serde_json::to_vec(x).context(ReplyJsonSnafu)?;
+        let body = serde_json::to_vec(&RecRequest {
+            alg: ALG_ECMR,
+            jwk: x,
+        })
+        .context(ReplyJsonSnafu)?;
         let response = http::post(
             &endpoint,
             &format!("/rec/{kid}"),
@@ -108,6 +112,17 @@ impl Exchange for HttpExchange {
             code => Err(ExchangeError::Status { code }),
         }
     }
+}
+
+const ALG_ECMR: &str = "ECMR";
+
+/// The /rec body as clevis sends it: the blinded point plus `"alg":"ECMR"`,
+/// which tang.go-based servers require (docs/clevis-format.md §2.3).
+#[derive(Serialize)]
+struct RecRequest<'a> {
+    alg: &'static str,
+    #[serde(flatten)]
+    jwk: &'a EcJwk,
 }
 
 #[derive(Debug, Deserialize)]
@@ -401,6 +416,9 @@ mod tests {
                 .unwrap_or_default()
                 .to_owned();
             let x: EcJwk = serde_json::from_str(body).unwrap_or_else(|e| unreachable!("{e}"));
+            let raw: serde_json::Value =
+                serde_json::from_str(body).unwrap_or_else(|e| unreachable!("{e}"));
+            assert_eq!(raw["alg"], "ECMR", "clevis-compatible /rec body");
             let y = MockTang::new(&[])
                 .recover(TANG_A_URL, &kid, &x)
                 .unwrap_or_else(|e| unreachable!("{e}"));

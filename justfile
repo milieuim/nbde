@@ -8,6 +8,7 @@ build-package:
 
 test:
     cargo nextest run --no-tests=pass
+    cd gate; go test -race ./...
 
 lint:
     cargo clippy --all-targets -- --deny warnings
@@ -17,4 +18,4 @@ check:
     nix flake check
 
 vm-tests:
-    nix build --no-link -L .#checks.x86_64-linux.vm-agent .#checks.x86_64-linux.vm-cryptsetup-socket .#checks.x86_64-linux.vm-daemon .#checks.x86_64-linux.vm-check .#checks.x86_64-linux.vm-initrd
+    nix build --no-link -L .#checks.x86_64-linux.vm-agent .#checks.x86_64-linux.vm-cryptsetup-socket .#checks.x86_64-linux.vm-daemon .#checks.x86_64-linux.vm-check .#checks.x86_64-linux.vm-initrd .#checks.x86_64-linux.vm-gate .#checks.x86_64-linux.vm-gate-initrd
