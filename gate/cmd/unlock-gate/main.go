@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/oluceps/nbde/gate/internal/gate"
+	"github.com/milieuim/nbde/gate/internal/gate"
 )
 
 const usage = `usage:

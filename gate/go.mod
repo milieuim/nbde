@@ -1,4 +1,4 @@
-module github.com/oluceps/nbde/gate
+module github.com/milieuim/nbde/gate
 
 go 1.26.7
 
