@@ -11,7 +11,10 @@
       approverPub = builtins.readFile (keys + "/approver.pub");
 
       gateNode = id: {
-        imports = [ self.nixosModules.default ];
+        imports = [
+          self.nixosModules.default
+          ./immutable-etc.nix
+        ];
         services.unlock-gate = {
           enable = true;
           gateId = id;
@@ -39,7 +42,10 @@
         nodes.laptop =
           { nodes, ... }:
           {
-            imports = [ self.nixosModules.default ];
+            imports = [
+              self.nixosModules.default
+              ./immutable-etc.nix
+            ];
             environment.etc."nbde-test".source = keys;
             programs.unlock-approve = {
               enable = true;
@@ -57,7 +63,10 @@
             ...
           }:
           {
-            imports = [ self.nixosModules.default ];
+            imports = [
+              self.nixosModules.default
+              ./immutable-etc.nix
+            ];
 
             virtualisation = {
               emptyDiskImages = [ 512 ];

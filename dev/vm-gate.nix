@@ -12,7 +12,10 @@
       approverPub = builtins.readFile (keys + "/approver.pub");
 
       gateNode = id: {
-        imports = [ self.nixosModules.default ];
+        imports = [
+          self.nixosModules.default
+          ./immutable-etc.nix
+        ];
         services.unlock-gate = {
           enable = true;
           gateId = id;
@@ -38,7 +41,10 @@
             mesh = n: "http://${nodes.${n}.networking.primaryIPAddress}:7501";
           in
           {
-            imports = [ self.nixosModules.default ];
+            imports = [
+              self.nixosModules.default
+              ./immutable-etc.nix
+            ];
             networking.hostName = "eihort";
             environment.systemPackages = [
               agent
@@ -95,6 +101,10 @@
                     g.succeed("unlock-gate ctl deny --client eihort", "unlock-gate ctl disarm --client eihort")
 
             start_all()
+            for m in [sgp, nrt, client]:
+                m.wait_for_unit("multi-user.target")
+                fs, opts = m.succeed("findmnt -no FSTYPE,OPTIONS /etc").split()
+                assert fs == "overlay" and "ro" in opts.split(","), (fs, opts)
             for g in gates:
                 g.wait_for_unit("unlock-gate.service")
                 g.wait_for_open_port(7500)
