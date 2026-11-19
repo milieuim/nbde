@@ -41,8 +41,8 @@ On each gate, the running client, and the approver's machine:
 # gate
 services.unlock-gate = {
   enable = true;
-  gateId = "sgp";
-  meshInterface = "vxlan0";
+  gateId = "yidhra";
+  meshInterface = "vxlan-mesh";
   clients.eihort = {
     agentPublicKey = "...";            # unlock-gate agent-key --public <key>
     # any one of these may sign approvals
@@ -54,7 +54,7 @@ services.unlock-gate = {
 services.unlock-agent = {
   enable = true;
   keyFile = "/persist/keys/unlock-agent.ed25519";
-  gates = { sgp = "http://[fdcc::4]:7501"; nrt = "http://[fdcc::5]:7501"; };
+  gates = { yidhra = "http://[fdcc::4]:7501"; abhoth = "http://[fdcc::5]:7501"; };
 };
 
 # approver: `unlock-gate approve` shows every gate's status, then signs once
@@ -63,7 +63,7 @@ programs.unlock-approve = {
   client = "eihort";
   # tried in order; whichever security key is plugged in signs
   keyFiles = [ "/home/me/.ssh/id_ed25519_sk" "/home/me/.ssh/id_ed25519_sk2" ];
-  gates = { sgp = "http://[fdcc::4]:7501"; nrt = "http://[fdcc::5]:7501"; };
+  gates = { yidhra = "http://[fdcc::4]:7501"; abhoth = "http://[fdcc::5]:7501"; };
 };
 ```
 

@@ -66,10 +66,11 @@ measures (see §10.2):
 | Role | Host | Public address | Mesh address |
 |---|---|---|---|
 | client | eihort | behind NAT (home broadband) | `fdcc::3` |
-| gate `sgp` | yidhra | `216.195.195.184`, `2a0f:1cc6:b225:0:c744:d4a4:9364:2971` | `fdcc::4` |
-| gate `nrt` | abhoth | `154.31.114.112`, `2403:18c0:1000:13a:343b:65ff:fe1b:7a0f` | `fdcc::5` |
-| gate `tyo` | nodens | `193.123.164.59`, `2603:c021:8025:648e:0:dc5b:117f:5225` | `fdcc::8` |
+| gate | yidhra | `216.195.195.184`, `2a0f:1cc6:b225:0:c744:d4a4:9364:2971` | `fdcc::4` |
+| gate | abhoth | `154.31.114.112`, `2403:18c0:1000:13a:343b:65ff:fe1b:7a0f` | `fdcc::5` |
+| gate | nodens | `193.123.164.59`, `2603:c021:8025:648e:0:dc5b:117f:5225` | `fdcc::8` |
 
+- A gate's id (`gateId`, the `aud` of signed messages) is its host name.
 - The threshold MUST be 2-of-3, counted per gate (not per address).
 - azasos (HKG) MUST NOT hold a share. Rationale: under this threat model it is
   the cheapest to compromise; including it as 2-of-4 lowers security, and as
@@ -137,14 +138,14 @@ reference implementation. nbde-agent MUST NOT implement encryption or binding.
   "t": 2,
   "pins": { "sss": [
     { "t": 1, "pins": { "tang": [
-      { "url": "http://216.195.195.184:7500/c/eihort",                        "thp": "<sgp>" },
-      { "url": "http://[2a0f:1cc6:b225:0:c744:d4a4:9364:2971]:7500/c/eihort",  "thp": "<sgp>" } ] } },
+      { "url": "http://216.195.195.184:7500/c/eihort",                        "thp": "<yidhra>" },
+      { "url": "http://[2a0f:1cc6:b225:0:c744:d4a4:9364:2971]:7500/c/eihort",  "thp": "<yidhra>" } ] } },
     { "t": 1, "pins": { "tang": [
-      { "url": "http://154.31.114.112:7500/c/eihort",                         "thp": "<nrt>" },
-      { "url": "http://[2403:18c0:1000:13a:343b:65ff:fe1b:7a0f]:7500/c/eihort","thp": "<nrt>" } ] } },
+      { "url": "http://154.31.114.112:7500/c/eihort",                         "thp": "<abhoth>" },
+      { "url": "http://[2403:18c0:1000:13a:343b:65ff:fe1b:7a0f]:7500/c/eihort","thp": "<abhoth>" } ] } },
     { "t": 1, "pins": { "tang": [
-      { "url": "http://193.123.164.59:7500/c/eihort",                         "thp": "<tyo>" },
-      { "url": "http://[2603:c021:8025:648e:0:dc5b:117f:5225]:7500/c/eihort",  "thp": "<tyo>" } ] } }
+      { "url": "http://193.123.164.59:7500/c/eihort",                         "thp": "<nodens>" },
+      { "url": "http://[2603:c021:8025:648e:0:dc5b:117f:5225]:7500/c/eihort",  "thp": "<nodens>" } ] } }
   ] }
 }
 ```
@@ -187,14 +188,17 @@ budget is valid, obtaining a share or exhausting an arm. Therefore:
 ```nix
 services.unlock-gate = {
   enable = true;
-  gateId = "sgp";
-  publicAddresses = [ "::" ];   # port publicPort = 7500; "::" also accepts IPv4
-  meshAddresses = [ "::" ];     # port meshPort = 7501
-  meshInterface = "vxlan0";     # the mesh port is opened only here
+  gateId = "yidhra";             # the host name
+  publicAddresses = [ "::" ];    # port publicPort = 7500; "::" also accepts IPv4
+  meshAddresses = [ "fdcc::4" ]; # port meshPort = 7501; the gate's mesh anchor address
+  meshInterface = "vxlan-mesh";  # the mesh port is opened only here
   clients.eihort = {
     agentPublicKey = "<Ed25519 public key, base64url>";
     allowFrom = [ ];            # OPTIONAL, list of CIDRs; empty means unrestricted
-    approvers = [ "sk-ssh-ed25519@openssh.com AAAA… riro@kaambl" ];
+    approvers = [               # any one of these may sign an approval
+      "sk-ssh-ed25519@openssh.com AAAA…"
+      "sk-ssh-ed25519@openssh.com AAAA…"
+    ];
   };
   requireSecurityKey = true;    # approvers MUST be sk-* keys; tests MAY disable
   telegram.tokenFile = config.vaultix.secrets.unlock-gate-tg.path;  # read as a systemd credential
@@ -635,7 +639,7 @@ gate: notify unlock_released(arm)
 
 ```
 initrd: nbde-agent ─ POST /rec ─► 403 (gate logs and notifies unlock_denied)
-        console: sgp denied / nrt denied / tyo unreachable; retry every 10 s
+        console: yidhra denied / abhoth denied / nodens unreachable; retry every 10 s
 user: receives notification → unlock-gate approve --client eihort on the laptop
       → status from all gates shown side by side (source, time, heartbeat)
       → confirm → one security-key touch → token posted to every gate over the mesh
@@ -766,7 +770,7 @@ All of the following tests MUST pass before merging.
   hosted-page tampering risks MUST be re-evaluated.
 - Runbooks for in-place nvme encryption and per-disk LUKS migration of pool0.
 
-## 13. Implementation status (2026-11-18)
+## 13. Implementation status (2026-11-19)
 
 ### 13.1 Done (nbde repository)
 
@@ -774,8 +778,8 @@ All of the following tests MUST pass before merging.
 |---|---|
 | nbde-agent: jose, tang/sss pins, HTTP, AF_UNIX delivery, daemon mode, check mode, status output | Done, 61 unit tests |
 | NixOS module `boot.initrd.nbde` | Done |
-| unlock-gate (Go, `gate/`, tang.go from the `oluceps/tang.go` `fix/audit-findings` branch): Tang-compatible `/adv` and `/rec` with the §6.7 decision, signed heartbeat/arm/disarm, sshsig approval tokens, `/v1/status`, root-only ctl socket, Telegram notifications, rate limiting, in-memory state | Done, 23 unit tests |
-| unlock-gate CLI: `serve`, `ctl`, `send` (eihort side), `approve`/`deny` (laptop side), `agent-key` | Done |
+| unlock-gate (Go, `gate/`, tang.go from the `oluceps/tang.go` `fix/audit-findings` branch): Tang-compatible `/adv` and `/rec` with the §6.7 decision, signed heartbeat/arm/disarm, sshsig approval tokens, `/v1/status`, root-only ctl socket, Telegram notifications, rate limiting, in-memory state | Done, 24 unit tests |
+| unlock-gate CLI: `serve`, `ctl`, `send` (eihort side), `approve`/`deny` (laptop side; several approver keys tried in order), `agent-key` | Done |
 | NixOS modules `services.unlock-gate`, `services.unlock-agent` (heartbeat timer, `<host>-reboot`), `programs.unlock-approve` | Done |
 | VM tests `vm-agent`, `vm-check`, `vm-daemon`, `vm-cryptsetup-socket`, `vm-initrd`, `vm-gate`, `vm-gate-initrd` | All pass |
 | Interop with official clevis 22 / tang 15, and sshsig with OpenSSH `ssh-keygen -Y sign` | Verified |
@@ -789,13 +793,27 @@ Bug found while integrating: nbde-agent sent `/rec` bodies without
 the agent now sends what clevis sends, and the gate adds the member when it
 is missing.
 
-### 13.2 Not done
+### 13.2 Deployment (2026-11-19)
 
-- Security-key signing has only been exercised with a software stand-in
-  (unit test) and plain ed25519 keys (VM tests, `requireSecurityKey = false`).
-  A real FIDO key with `sk-ssh-ed25519` still needs one manual run.
-- Telegram delivery has not been tested against the real Bot API.
-- Not yet deployed to the gates or eihort.
+- Gates yidhra, abhoth and nodens run unlock-gate; the mesh API listens only
+  on each gate's anchor address. eihort sends heartbeats and has
+  `eihort-reboot`; the approver runs on hastur with either security key.
+- eihort's root is bound 2-of-3 (§5.1 with the host names); `nbde-agent
+  check` recovered P after a real security-key approval (PIN and touch).
+- A planned reboot through `eihort-reboot` unlocked in the initrd on the
+  second attempt, about 11 s after boot: the first attempt ran before the
+  network was up. The gates saw eihort's home addresses, so the initrd
+  reaches them directly; one address family won on each gate and the other
+  was refused without an alert.
+- Telegram notifications were sent without errors; receipt in the chat is
+  still to be confirmed.
+
+### 13.2.1 Not done
+
+- The unplanned-boot flow (refused, then approved from hastur) has only run
+  in the VM test, not on eihort.
+- After the first deployment, abhoth's unlock-gate unit did not start until
+  started by hand; whether it starts on its own at boot is unconfirmed.
 
 ### 13.3 Known limitations and to-dos
 
@@ -807,8 +825,8 @@ is missing.
 - The agent's first attempt often fails because the network is not up yet;
   the default `retryInterval = 10` makes a normal boot wait about 10 s longer.
   A backoff starting with a short interval would fix this.
-- §12.1 item 7: initrd secrets behavior under lanzaboote must be verified on eihort.
-- §12.1 item 8: actual reachability from the home network (bypassing sing-box)
-  to each gate endpoint must be measured.
-- §7.8 prerequisites (nvme FDE, random swap keys, BIOS/BMC hardening) are all
-  not yet implemented.
+- §12.1 item 7: eihort boots with plain systemd-boot. Before the secureboot
+  (lanzaboote) import comes back, initrd secrets under lanzaboote must be
+  verified.
+- §7.8 prerequisites: nvme FDE and random swap keys are done; BIOS/BMC
+  hardening is not.
