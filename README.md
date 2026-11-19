@@ -45,7 +45,8 @@ services.unlock-gate = {
   meshInterface = "vxlan0";
   clients.eihort = {
     agentPublicKey = "...";            # unlock-gate agent-key --public <key>
-    approvers = [ "sk-ssh-ed25519@openssh.com AAAA..." ];
+    # any one of these may sign approvals
+    approvers = [ "sk-ssh-ed25519@openssh.com AAAA..." "sk-ssh-ed25519@openssh.com AAAA..." ];
   };
 };
 
@@ -60,7 +61,8 @@ services.unlock-agent = {
 programs.unlock-approve = {
   enable = true;
   client = "eihort";
-  keyFile = "/home/me/.ssh/id_ed25519_sk";
+  # tried in order; whichever security key is plugged in signs
+  keyFiles = [ "/home/me/.ssh/id_ed25519_sk" "/home/me/.ssh/id_ed25519_sk2" ];
   gates = { sgp = "http://[fdcc::4]:7501"; nrt = "http://[fdcc::5]:7501"; };
 };
 ```

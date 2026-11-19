@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -693,5 +694,37 @@ func TestConcurrentFamiliesDoNotAlert(t *testing.T) {
 	f.rec("2001:db8::7", f.kid())
 	if n := f.events.count(EventUnlockDenied); n != 1 {
 		t.Fatalf("a refusal after the grace period must alert, got %d", n)
+	}
+}
+
+func TestApproverConfigKeyFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := filepath.Join(dir, "approver.json")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	gates := `"gates":{"yidhra":"http://[fdcc::4]:7501"}`
+
+	c, err := LoadApproverConfig(write(`{"client":"eihort","key_files":["/a","/b"],` + gates + `}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.SigningKeys(); len(got) != 2 || got[0] != "/a" || got[1] != "/b" {
+		t.Fatalf("key_files order: %v", got)
+	}
+
+	c, err = LoadApproverConfig(write(`{"client":"eihort","key_file":"/a","key_files":["/b"],` + gates + `}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.SigningKeys(); len(got) != 2 || got[0] != "/a" {
+		t.Fatalf("key_file first: %v", got)
+	}
+
+	if _, err := LoadApproverConfig(write(`{"client":"eihort",` + gates + `}`)); err == nil {
+		t.Fatal("config without any key accepted")
 	}
 }

@@ -278,7 +278,7 @@ func approve(args []string, typ string) error {
 	if err != nil {
 		return err
 	}
-	signature, err := sshSign(cfg.KeyFile, message)
+	signature, err := sshSignAny(cfg.SigningKeys(), message)
 	if err != nil {
 		return err
 	}
@@ -310,6 +310,26 @@ func confirm(question string) bool {
 
 // sshSign runs ssh-keygen -Y sign, which talks to the security key (one
 // touch). This runs on the approver's machine, never on a gate.
+// sshSignAny signs with the first key that works: with several security
+// keys configured, only the one plugged in can sign, and ssh-keygen fails
+// quickly for the others.
+func sshSignAny(keyFiles []string, message []byte) (string, error) {
+	var errs []error
+	for _, keyFile := range keyFiles {
+		if _, err := os.Stat(keyFile); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		sig, err := sshSign(keyFile, message)
+		if err == nil {
+			return sig, nil
+		}
+		fmt.Fprintf(os.Stderr, "%s: %v\n", keyFile, err)
+		errs = append(errs, fmt.Errorf("%s: %w", keyFile, err))
+	}
+	return "", fmt.Errorf("no key could sign: %w", errors.Join(errs...))
+}
+
 func sshSign(keyFile string, message []byte) (string, error) {
 	dir, err := os.MkdirTemp("", "unlock-gate-approve-")
 	if err != nil {

@@ -29,10 +29,17 @@ in
       example = "eihort";
     };
 
-    keyFile = mkOption {
-      type = types.str;
-      example = "/home/riro/.ssh/id_ed25519_sk";
-      description = "SSH key passed to `ssh-keygen -Y sign -f`; normally a security-key handle.";
+    keyFiles = mkOption {
+      type = types.nonEmptyListOf types.str;
+      example = [
+        "/home/riro/.ssh/id_ed25519_sk"
+        "/home/riro/.ssh/id_ed25519_sk2"
+      ];
+      description = ''
+        SSH keys passed to `ssh-keygen -Y sign -f`, normally security-key
+        handles. They are tried in order; missing files are skipped, so with
+        several security keys whichever one is plugged in signs.
+      '';
     };
 
     gates = mkOption {
@@ -50,7 +57,7 @@ in
       (pkgs.formats.json { }).generate "approver.json"
         {
           inherit (cfg) client gates;
-          key_file = cfg.keyFile;
+          key_files = cfg.keyFiles;
         };
   };
 }

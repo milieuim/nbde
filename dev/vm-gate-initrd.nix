@@ -50,7 +50,10 @@
             programs.unlock-approve = {
               enable = true;
               client = "machine";
-              keyFile = "/root/approver";
+              keyFiles = [
+                "/root/approver-absent"
+                "/root/approver"
+              ];
               gates = meshGates nodes;
             };
           };

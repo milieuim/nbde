@@ -63,7 +63,10 @@
             programs.unlock-approve = {
               enable = true;
               client = "eihort";
-              keyFile = "/root/approver";
+              keyFiles = [
+                "/root/approver-absent"
+                "/root/approver"
+              ];
               gates = {
                 sgp = mesh "sgp";
                 nrt = mesh "nrt";

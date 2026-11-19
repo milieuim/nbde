@@ -38,9 +38,21 @@ type AgentConfig struct {
 
 // ApproverConfig is the approver's view (the laptop).
 type ApproverConfig struct {
-	Client  string    `json:"client"`
-	KeyFile string    `json:"key_file"`
-	Gates   Endpoints `json:"gates"`
+	Client string `json:"client"`
+	// KeyFile is a single signing key; KeyFiles lists several (e.g. two
+	// security keys), tried in order until one signs. Either may be set.
+	KeyFile  string    `json:"key_file,omitempty"`
+	KeyFiles []string  `json:"key_files,omitempty"`
+	Gates    Endpoints `json:"gates"`
+}
+
+// SigningKeys returns the configured key files in the order to try them.
+func (c *ApproverConfig) SigningKeys() []string {
+	keys := append([]string(nil), c.KeyFiles...)
+	if c.KeyFile != "" {
+		keys = append([]string{c.KeyFile}, keys...)
+	}
+	return keys
 }
 
 func loadJSON(path string, v any) error {
@@ -70,8 +82,8 @@ func LoadApproverConfig(path string) (*ApproverConfig, error) {
 	if err := loadJSON(path, &c); err != nil {
 		return nil, fmt.Errorf("approver config: %w", err)
 	}
-	if !namePattern.MatchString(c.Client) || len(c.Gates) == 0 || c.KeyFile == "" {
-		return nil, errors.New("approver config needs client, key_file and gates")
+	if !namePattern.MatchString(c.Client) || len(c.Gates) == 0 || len(c.SigningKeys()) == 0 {
+		return nil, errors.New("approver config needs client, key_file or key_files, and gates")
 	}
 	return &c, nil
 }
